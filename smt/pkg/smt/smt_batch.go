@@ -24,6 +24,16 @@ func NewInsertBatchConfig(ctx context.Context, logPrefix string, shouldPrintProg
 	}
 }
 
+func trySendProcessChan(ch chan uint64) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- uint64(1):
+	default:
+	}
+}
+
 func (s *SMT) InsertBatch(cfg InsertBatchConfig, nodeKeys []*utils.NodeKey, nodeValues []*utils.NodeValue8, nodeValuesHashes []*[4]uint64, rootNodeHash *utils.NodeKey) (*SMTResponse, error) {
 	s.clearUpMutex.Lock()
 	defer s.clearUpMutex.Unlock()
@@ -39,46 +49,36 @@ func (s *SMT) InsertBatch(cfg InsertBatchConfig, nodeKeys []*utils.NodeKey, node
 	if cfg.shouldPrintProgress {
 		progressChanPre, stopProgressPrinterPre = zk.ProgressPrinter(fmt.Sprintf("[%s] SMT incremental progress (pre-process)", cfg.logPrefix), uint64(4), false)
 	} else {
-		progressChanPre = make(chan uint64, 100)
-		var once sync.Once
-
-		stopProgressPrinterPre = func() {
-			once.Do(func() { close(progressChanPre) })
-		}
+		stopProgressPrinterPre = func() {}
 	}
 	defer stopProgressPrinterPre()
 
 	if err = validateDataLengths(nodeKeys, nodeValues, &nodeValuesHashes); err != nil {
 		return nil, err
 	}
-	progressChanPre <- uint64(1)
+	trySendProcessChan(progressChanPre)
 
 	if err = removeDuplicateEntriesByKeys(&size, &nodeKeys, &nodeValues, &nodeValuesHashes); err != nil {
 		return nil, err
 	}
-	progressChanPre <- uint64(1)
+	trySendProcessChan(progressChanPre)
 
 	if err = calculateNodeValueHashesIfMissing(nodeValues, &nodeValuesHashes); err != nil {
 		return nil, err
 	}
-	progressChanPre <- uint64(1)
+	trySendProcessChan(progressChanPre)
 
 	if err = calculateRootNodeHashIfNil(s, &rootNodeHash); err != nil {
 		return nil, err
 	}
-	progressChanPre <- uint64(1)
+	trySendProcessChan(progressChanPre)
 	stopProgressPrinterPre()
 	var progressChan chan uint64
 	var stopProgressPrinter func()
 	if cfg.shouldPrintProgress {
 		progressChan, stopProgressPrinter = zk.ProgressPrinter(fmt.Sprintf("[%s] SMT incremental progress (process)", cfg.logPrefix), uint64(size), false)
 	} else {
-		progressChan = make(chan uint64)
-		var once sync.Once
-
-		stopProgressPrinter = func() {
-			once.Do(func() { close(progressChan) })
-		}
+		stopProgressPrinter = func() {}
 	}
 	defer stopProgressPrinter()
 
@@ -86,9 +86,9 @@ func (s *SMT) InsertBatch(cfg InsertBatchConfig, nodeKeys []*utils.NodeKey, node
 		select {
 		case <-cfg.ctx.Done():
 			return nil, fmt.Errorf(fmt.Sprintf("[%s] Context done", cfg.logPrefix))
-		case progressChan <- uint64(1):
 		default:
 		}
+		trySendProcessChan(progressChan)
 
 		insertingNodeKey := nodeKeys[i]
 		insertingNodeValue := nodeValues[i]
@@ -181,10 +181,7 @@ func (s *SMT) InsertBatch(cfg InsertBatchConfig, nodeKeys []*utils.NodeKey, node
 			maxInsertingNodePathLevel = insertingNodePathLevel
 		}
 	}
-	select {
-	case progressChan <- uint64(1):
-	default:
-	}
+	trySendProcessChan(progressChan)
 	stopProgressPrinter()
 
 	s.updateDepth(maxInsertingNodePathLevel)
@@ -196,16 +193,11 @@ func (s *SMT) InsertBatch(cfg InsertBatchConfig, nodeKeys []*utils.NodeKey, node
 	if cfg.shouldPrintProgress {
 		progressChanDel, stopProgressPrinterDel = zk.ProgressPrinter(fmt.Sprintf("[%s] SMT incremental progress (deletes)", cfg.logPrefix), uint64(totalDeleteOps), false)
 	} else {
-		progressChanDel = make(chan uint64, 100)
-		var once sync.Once
-
-		stopProgressPrinterDel = func() {
-			once.Do(func() { close(progressChanDel) })
-		}
+		stopProgressPrinterDel = func() {}
 	}
 	defer stopProgressPrinterDel()
 	for _, mapLevel0 := range nodeHashesForDelete {
-		progressChanDel <- uint64(1)
+		trySendProcessChan(progressChanDel)
 		for _, mapLevel1 := range mapLevel0 {
 			for _, mapLevel2 := range mapLevel1 {
 				for _, nodeHash := range mapLevel2 {
@@ -223,19 +215,11 @@ func (s *SMT) InsertBatch(cfg InsertBatchConfig, nodeKeys []*utils.NodeKey, node
 	if cfg.shouldPrintProgress {
 		progressChanFin, stopProgressPrinterFin = zk.ProgressPrinter(fmt.Sprintf("[%s] SMT incremental progress (finalize)", cfg.logPrefix), uint64(totalFinalizeOps), false)
 	} else {
-		progressChanFin = make(chan uint64, 100)
-		var once sync.Once
-
-		stopProgressPrinterFin = func() {
-			once.Do(func() { close(progressChanFin) })
-		}
+		stopProgressPrinterFin = func() {}
 	}
 	defer stopProgressPrinterFin()
 	for i, nodeValue := range nodeValues {
-		select {
-		case progressChanFin <- uint64(1):
-		default:
-		}
+		trySendProcessChan(progressChanFin)
 		if !nodeValue.IsZero() {
 			err = s.hashSaveByPointers(nodeValue.ToUintArrayByPointer(), &utils.BranchCapacity, nodeValuesHashes[i])
 			if err != nil {

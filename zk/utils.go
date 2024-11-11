@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ledgerwatch/log/v3"
 	"sync"
+
+	"github.com/ledgerwatch/log/v3"
 )
 
 var ErrLimboState = errors.New("Calculating limbo state")
@@ -14,7 +15,7 @@ var ErrLimboState = errors.New("Calculating limbo state")
 // prints progress every 10 seconds
 // returns a channel to send progress to, and a function to stop the printer routine
 func ProgressPrinter(message string, total uint64, quiet bool) (chan uint64, func()) {
-	progress := make(chan uint64)
+	progress := make(chan uint64, total)
 	ctDone := make(chan bool)
 	var once sync.Once
 
